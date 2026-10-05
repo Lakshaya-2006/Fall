@@ -1,13 +1,21 @@
+from datetime import datetime
+
 from flask import Flask, request, jsonify
-from twilio.twiml.voice_response import VoiceResponse, Gather
+from twilio.twiml.voice_response import VoiceResponse
 
 app = Flask(__name__)
 
 # ============================================================
-# GLOBAL ALERT STATUS
+# ALERT STATUS
 # ============================================================
+# Rule:  caregiver ANSWERS the call  -> response (acknowledged)
+#        caregiver does NOT answer   -> no response (call_care.py moves to the next caregiver)
 
 alert_acknowledged = False
+answered_at = None
+
+# Only used when machine detection is switched on in call_care.py
+MACHINE_VALUES = ("machine_start", "machine_end_beep", "machine_end_silence", "machine_end_other", "fax")
 
 
 # ============================================================
@@ -16,181 +24,61 @@ alert_acknowledged = False
 
 @app.route("/", methods=["GET"])
 def home():
-
-    return """
-    <h1>🚨 Fall Detection Voice Alert Server</h1>
-    <p>Server is running.</p>
-    """
+    return "<h1>Fall Detection Voice Alert Server</h1><p>Server is running.</p>"
 
 
 # ============================================================
-# VOICE CALL
+# VOICE CALL  (Twilio requests this URL only when the call is answered)
 # ============================================================
 
 @app.route("/voice", methods=["POST", "GET"])
 def voice():
+    global alert_acknowledged, answered_at
 
-    print("\n========================================")
-    print("📞 CAREGIVER ANSWERED THE CALL")
-    print("========================================")
-
-    response = VoiceResponse()
-
-    # --------------------------------------------------------
-    # Speech recognition
-    # --------------------------------------------------------
-
-    gather = Gather(
-        input="speech",
-        action="/speech",
-        method="POST",
-        speech_timeout="auto",
-        timeout=10
-    )
-
-    gather.say(
-        "Emergency alert. "
-        "A fall has been detected. "
-        "Please say yes to acknowledge this alert.",
-        voice="alice"
-    )
-
-    response.append(gather)
-
-    # --------------------------------------------------------
-    # If no speech was detected
-    # --------------------------------------------------------
-
-    response.say(
-        "No response was received. Goodbye.",
-        voice="alice"
-    )
-
-    response.hangup()
-
-    return str(response)
-
-
-# ============================================================
-# RECEIVE SPEECH
-# ============================================================
-
-@app.route("/speech", methods=["POST"])
-def speech():
-
-    global alert_acknowledged
-
-    # Twilio sends the recognized speech here
-    speech_result = request.form.get("SpeechResult", "")
-
-    confidence = request.form.get("Confidence", "")
-
-    speech_text = speech_result.lower().strip()
-
-    print("\n========================================")
-    print("🎤 CAREGIVER SPEECH RECEIVED")
-    print("Speech:", speech_result)
-    print("Confidence:", confidence)
-    print("========================================")
-
-    # --------------------------------------------------------
-    # Words/phrases that mean ACKNOWLEDGED
-    # --------------------------------------------------------
-
-    acknowledgement_words = [
-        "yes",
-        "yeah",
-        "yep",
-        "okay",
-        "ok",
-        "acknowledge",
-        "acknowledged",
-        "i am coming",
-        "i'm coming",
-        "coming",
-        "on my way"
-    ]
-
-    acknowledged = False
-
-    for word in acknowledgement_words:
-
-        if word in speech_text:
-
-            acknowledged = True
-            break
+    to_number = request.values.get("To", "")
+    answered_by = request.values.get("AnsweredBy", "")
 
     response = VoiceResponse()
 
-    # --------------------------------------------------------
-    # CAREGIVER ACKNOWLEDGED
-    # --------------------------------------------------------
-
-    if acknowledged:
-
-        alert_acknowledged = True
-
-        print("\n========================================")
-        print("✅ CAREGIVER ACKNOWLEDGED THE ALERT")
-        print("🛑 ESCALATION STOPPED")
-        print("========================================")
-
-        response.say(
-            "Thank you. "
-            "Your response has been received. "
-            "The emergency alert has been acknowledged.",
-            voice="alice"
-        )
-
+    # Voicemail / answering machine does not count as a person attending the call
+    if answered_by in MACHINE_VALUES:
+        print(f"\n📠 Answering machine detected ({answered_by}) -> NOT counted as a response")
         response.hangup()
-
         return str(response)
 
-    # --------------------------------------------------------
-    # CAREGIVER DID NOT SAY YES
-    # --------------------------------------------------------
+    alert_acknowledged = True
+    answered_at = datetime.now().isoformat(timespec="seconds")
 
-    print("\n❌ Response was not recognized as acknowledgement")
+    print("\n========================================")
+    print(f"📞 CAREGIVER ANSWERED THE CALL ({to_number})")
+    print("✅ COUNTED AS A RESPONSE — ESCALATION STOPPED")
+    print("========================================")
 
-    response.say(
-        "Your response was not recognized. "
-        "Goodbye.",
-        voice="alice"
-    )
-
+    message = ("Emergency alert. A fall has been detected, and the person has not gotten up. "
+               "Please check on them immediately.")
+    response.say(message, voice="alice")
+    response.pause(length=1)
+    response.say(message, voice="alice")
     response.hangup()
-
     return str(response)
 
 
 # ============================================================
-# CHECK ACKNOWLEDGEMENT
+# STATUS / RESET
 # ============================================================
 
 @app.route("/status", methods=["GET"])
 def status():
+    return jsonify({"acknowledged": alert_acknowledged, "answered_at": answered_at})
 
-    return jsonify({
-        "acknowledged": alert_acknowledged
-    })
-
-
-# ============================================================
-# RESET ALERT
-# ============================================================
 
 @app.route("/reset", methods=["GET"])
 def reset():
-
-    global alert_acknowledged
-
+    global alert_acknowledged, answered_at
     alert_acknowledged = False
-
+    answered_at = None
     print("\n🔄 Alert status reset")
-
-    return jsonify({
-        "acknowledged": False
-    })
+    return jsonify({"acknowledged": False})
 
 
 # ============================================================
@@ -198,21 +86,5 @@ def reset():
 # ============================================================
 
 if __name__ == "__main__":
-
-    print("\n========================================")
-    print("🚨 FALL DETECTION VOICE SERVER")
-    print("========================================")
-
-    print("🌐 Local server:")
-    print("http://127.0.0.1:5000")
-
-    print("🎤 Speech endpoint:")
-    print("/speech")
-
-    print("========================================\n")
-
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=False
-    )
+    print("\n🚨 FALL DETECTION VOICE SERVER  ->  http://127.0.0.1:5000\n")
+    app.run(host="0.0.0.0", port=5000, debug=False)
