@@ -1,5 +1,7 @@
 import os
 import time
+import subprocess
+import sys
 from collections import deque
 from datetime import datetime
 
@@ -48,6 +50,26 @@ def send_sms(body):
         return True
     except Exception as e:
         print("SMS failed:", e)
+        return False
+
+def trigger_caregiver_call():
+    """Start call_care.py in a separate Python process."""
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    call_script = os.path.join(project_dir, "call_care.py")
+
+    if not os.path.isfile(call_script):
+        print(f"ERROR: call_care.py not found: {call_script}")
+        return False
+
+    try:
+        subprocess.Popen(
+            [sys.executable, call_script],
+            cwd=project_dir
+        )
+        print("Caregiver calling process started.")
+        return True
+    except Exception as e:
+        print(f"Failed to start caregiver calling process: {e}")
         return False
 
 
@@ -125,10 +147,14 @@ while True:
 
             if not fallen:
                 fall_hits = fall_hits + 1 if is_fall else 0
-                if fall_hits >= FALL_CONFIRM_PREDS:
-                    fallen, fall_start, no_fall_since, alert_sent = True, t, None, False
-                    fall_wallclock = datetime.now()
-                    print(f"[{fall_wallclock:%H:%M:%S}] Fall detected, timer started")
+                
+            if fall_hits >= FALL_CONFIRM_PREDS:
+                fallen, fall_start, no_fall_since, alert_sent = True, t, None, False
+                fall_wallclock = datetime.now()
+
+                print(f"[{fall_wallclock:%H:%M:%S}] FALL DETECTED!")
+                trigger_caregiver_call()
+
                 text, color = ("Fall suspected...", (0, 165, 255)) if fall_hits else (
                     f"No fall ({1 - p_fall:.2f})", (0, 200, 0))
             else:
